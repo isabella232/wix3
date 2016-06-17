@@ -146,6 +146,12 @@ enum WIXSTDBA_CONTROL
     WIXSTDBA_CONTROL_SUCCESS_RESTART_TEXT,
     WIXSTDBA_CONTROL_SUCCESS_RESTART_BUTTON,
     WIXSTDBA_CONTROL_SUCCESS_CANCEL_BUTTON,
+	WIXSTDBA_CONTROL_HOWTO_IMAGE,
+	WIXSTDBA_CONTROL_HOWTO_LINK,
+	WIXSTDBA_CONTROL_TUTORIAL_IMAGE,
+	WIXSTDBA_CONTROL_TUTORIAL_LINK,
+	WIXSTDBA_CONTROL_DOCUMENTATION_IMAGE,
+	WIXSTDBA_CONTROL_DOCUMENTATION_LINK,
 
     WIXSTDBA_CONTROL_SUCCESS_HEADER,
     WIXSTDBA_CONTROL_SUCCESS_INSTALL_HEADER,
@@ -211,6 +217,12 @@ static THEME_ASSIGN_CONTROL_ID vrgInitControls[] = {
     { WIXSTDBA_CONTROL_SUCCESS_RESTART_TEXT, L"SuccessRestartText" },
     { WIXSTDBA_CONTROL_SUCCESS_RESTART_BUTTON, L"SuccessRestartButton" },
     { WIXSTDBA_CONTROL_SUCCESS_CANCEL_BUTTON, L"SuccessCancelButton" },
+	{ WIXSTDBA_CONTROL_HOWTO_IMAGE, L"HowToImage" },
+	{ WIXSTDBA_CONTROL_HOWTO_LINK, L"HowToLink" },
+	{ WIXSTDBA_CONTROL_TUTORIAL_IMAGE, L"TutorialImage" },
+	{ WIXSTDBA_CONTROL_TUTORIAL_LINK, L"TutorialLink" },
+	{ WIXSTDBA_CONTROL_DOCUMENTATION_IMAGE, L"DocumentationImage" },
+	{ WIXSTDBA_CONTROL_DOCUMENTATION_LINK, L"DocumentationLink" },
 
     { WIXSTDBA_CONTROL_FAILURE_LOGFILE_LINK, L"FailureLogFileLink" },
     { WIXSTDBA_CONTROL_FAILURE_MESSAGE_TEXT, L"FailureMessageText" },
@@ -2378,7 +2390,14 @@ private: // privates
                         fLaunchTargetExists = BalStringVariableExists(WIXSTDBA_VARIABLE_LAUNCH_TARGET_PATH);
                     }
 
-                    ThemeControlEnable(m_pTheme, WIXSTDBA_CONTROL_LAUNCH_BUTTON, fLaunchTargetExists && BOOTSTRAPPER_ACTION_UNINSTALL < m_plannedAction);
+					BOOL fShowLaunchButton = fLaunchTargetExists && BOOTSTRAPPER_ACTION_UNINSTALL < m_plannedAction;
+                    ThemeControlEnable(m_pTheme, WIXSTDBA_CONTROL_LAUNCH_BUTTON, fShowLaunchButton);
+					ThemeControlEnable(m_pTheme, WIXSTDBA_CONTROL_HOWTO_IMAGE, fShowLaunchButton);
+					ThemeControlEnable(m_pTheme, WIXSTDBA_CONTROL_HOWTO_LINK, fShowLaunchButton);
+					ThemeControlEnable(m_pTheme, WIXSTDBA_CONTROL_TUTORIAL_IMAGE, fShowLaunchButton);
+					ThemeControlEnable(m_pTheme, WIXSTDBA_CONTROL_TUTORIAL_LINK, fShowLaunchButton);
+					ThemeControlEnable(m_pTheme, WIXSTDBA_CONTROL_DOCUMENTATION_IMAGE, fShowLaunchButton);
+					ThemeControlEnable(m_pTheme, WIXSTDBA_CONTROL_DOCUMENTATION_LINK, fShowLaunchButton);
                     ThemeControlEnable(m_pTheme, WIXSTDBA_CONTROL_SUCCESS_RESTART_TEXT, fShowRestartButton);
                     ThemeControlEnable(m_pTheme, WIXSTDBA_CONTROL_SUCCESS_RESTART_BUTTON, fShowRestartButton);
 
