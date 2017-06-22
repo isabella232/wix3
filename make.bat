@@ -1,2 +1,2 @@
-"C:\Program Files (x86)\MSBuild\14.0\Bin\MSBuild.exe" wix.proj /p:Configuration=Release /p:OFFICIAL_WIX_BUILD=%~dp0\Key.snk /t:Rebuild
+"C:\Program Files (x86)\Microsoft Visual Studio\2017\Professional\MSBuild\15.0\Bin\MSBuild.exe" wix.proj /p:Configuration=Release /p:VisualStudioVersion=15.0 /p:OFFICIAL_WIX_BUILD=%~dp0Key.snk /t:Rebuild
 PAUSE

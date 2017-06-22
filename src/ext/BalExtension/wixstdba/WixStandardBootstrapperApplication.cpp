@@ -661,7 +661,24 @@ public: // IBootstrapperApplication
                         HRESULT hr = StrAllocFromError(&sczError, dwCode, NULL);
                         if (FAILED(hr) || !sczError || !*sczError)
                         {
-                            StrAllocFormatted(&sczError, L"0x%x", dwCode);
+                            // special case for ERROR_FAIL_NOACTION_REBOOT: use loc string for Windows XP
+                            if (ERROR_FAIL_NOACTION_REBOOT == dwCode)
+                            {
+                                LOC_STRING* pLocString = NULL;
+                                hr = LocGetString(m_pWixLoc, L"#(loc.ErrorFailNoActionReboot)", &pLocString);
+                                if (SUCCEEDED(hr))
+                                {
+                                    StrAllocString(&sczError, pLocString->wzText, 0);
+                                }
+                                else
+                                {
+                                    StrAllocFormatted(&sczError, L"0x%x", dwCode);
+                                }
+                            }
+                            else
+                            {
+                                StrAllocFormatted(&sczError, L"0x%x", dwCode);
+                            }
                         }
                     }
 
@@ -696,8 +713,11 @@ public: // IBootstrapperApplication
 #endif
         if (BOOTSTRAPPER_DISPLAY_FULL == m_command.display && (INSTALLMESSAGE_WARNING == mt || INSTALLMESSAGE_USER == mt))
         {
-            int nResult = ::MessageBoxW(m_hWnd, wzMessage, m_pTheme->sczCaption, uiFlags);
-            return nResult;
+            if (!m_fShowingInternalUiThisPackage)
+            {
+                int nResult = ::MessageBoxW(m_hWnd, wzMessage, m_pTheme->sczCaption, uiFlags);
+                return nResult;
+            }
         }
 
         if (INSTALLMESSAGE_ACTIONSTART == mt)
@@ -774,7 +794,8 @@ public: // IBootstrapperApplication
                 wz = sczFormattedString ? sczFormattedString : pPackage->sczDisplayName ? pPackage->sczDisplayName : wzPackageId;
             }
 
-            m_fShowingInternalUiThisPackage = pPackage && pPackage->fDisplayInternalUI;
+            //Burn engine doesn't show internal UI for msi packages during uninstall or repair actions.
+            m_fShowingInternalUiThisPackage = pPackage && pPackage->fDisplayInternalUI && BOOTSTRAPPER_ACTION_UNINSTALL != m_plannedAction && BOOTSTRAPPER_ACTION_REPAIR != m_plannedAction;
 
             ThemeSetTextControl(m_pTheme, WIXSTDBA_CONTROL_EXECUTE_PROGRESS_PACKAGE_TEXT, wz);
             ThemeSetTextControl(m_pTheme, WIXSTDBA_CONTROL_OVERALL_PROGRESS_PACKAGE_TEXT, wz);
@@ -982,7 +1003,7 @@ public: // IBootstrapperApplication
         __in_ecount_z(cFiles) LPCWSTR* rgwzFiles
         )
     {
-        if (m_fShowFilesInUse && !m_fPrereq && wzPackageId && *wzPackageId)
+        if (m_fShowFilesInUse && !m_fShowingInternalUiThisPackage && !m_fPrereq && wzPackageId && *wzPackageId)
         {
             //If this is an MSI package, display the files in use page.
             BAL_INFO_PACKAGE* pPackage = NULL;
@@ -996,6 +1017,22 @@ public: // IBootstrapperApplication
 
         return __super::OnExecuteFilesInUse(wzPackageId, cFiles, rgwzFiles);
     }
+
+
+protected: // internals
+    //
+    // FindLocFile - locates the desired localization file
+    //
+    HRESULT FindLocFile(
+        __in_z LPCWSTR wzBasePath,
+        __in_z LPCWSTR wzLocFileName,
+        __in_z_opt LPCWSTR wzLanguage,
+        __inout LPWSTR* psczPath
+        )
+    {
+        return LocProbeForFileEx(wzBasePath, wzLocFileName, wzLanguage, psczPath, m_fUseUILanguages);
+    }
+
 
 private: // privates
     //
@@ -1105,6 +1142,9 @@ private: // privates
 
         hr = BalManifestLoad(m_hModule, &pixdManifest);
         BalExitOnFailure(hr, "Failed to load bootstrapper application manifest.");
+
+        hr = ParseOptionVariablesFromXml(pixdManifest);
+        BalExitOnFailure(hr, "Failed to process bootstrapper option variables.");
 
         hr = ParseOverridableVariablesFromXml(pixdManifest);
         BalExitOnFailure(hr, "Failed to read overridable variables.");
@@ -1246,7 +1286,7 @@ private: // privates
         LPCWSTR wzLocFileName = m_fPrereq ? L"mbapreq.wxl" : L"thm.wxl";
 
         // Find and load .wxl file.
-        hr = LocProbeForFile(wzModulePath, wzLocFileName, wzLanguage, &sczLocPath);
+        hr = FindLocFile(wzModulePath, wzLocFileName, wzLanguage, &sczLocPath);
         BalExitOnFailure2(hr, "Failed to probe for loc file: %ls in path: %ls", wzLocFileName, wzModulePath);
 
         hr = LocLoadFromFile(sczLocPath, &m_pWixLoc);
@@ -1326,7 +1366,7 @@ private: // privates
         LPCWSTR wzThemeFileName = m_fPrereq ? L"mbapreq.thm" : L"thm.xml";
         LPWSTR sczCaption = NULL;
 
-        hr = LocProbeForFile(wzModulePath, wzThemeFileName, wzLanguage, &sczThemePath);
+        hr = FindLocFile(wzModulePath, wzThemeFileName, wzLanguage, &sczThemePath);
         BalExitOnFailure2(hr, "Failed to probe for theme file: %ls in path: %ls", wzThemeFileName, wzModulePath);
 
         hr = ThemeLoadFromFile(sczThemePath, &m_pTheme);
@@ -1348,6 +1388,84 @@ private: // privates
         ReleaseStr(sczCaption);
         ReleaseStr(sczThemePath);
 
+        return hr;
+    }
+
+
+    HRESULT ParseOptionVariablesFromXml(
+        __in IXMLDOMDocument* pixdManifest
+        )
+    {
+        HRESULT hr = S_OK;
+        IXMLDOMNode* pNode = NULL;
+        IXMLDOMNodeList* pNodes = NULL;
+        DWORD cNodes = 0;
+        LPWSTR sczName = NULL;
+        LPWSTR sczValue = NULL;
+
+        hr = XmlSelectNodes(pixdManifest, L"/BootstrapperApplicationData/WixStdbaSettings ", &pNodes);
+        if (S_FALSE == hr)
+        {
+            ExitFunction1(hr = S_OK);
+        }
+        ExitOnFailure(hr, "Failed to select option variable nodes.");
+
+        hr = pNodes->get_length((long*)&cNodes);
+        ExitOnFailure(hr, "Failed to get option variable node count.");
+
+        if (cNodes)
+        {
+            for (DWORD i = 0; i < cNodes; ++i)
+            {
+                hr = XmlNextElement(pNodes, &pNode, NULL);
+                ExitOnFailure(hr, "Failed to get next node.");
+
+                // @Value
+                hr = XmlGetAttributeEx(pNode, L"Value", &sczValue);
+                if (E_NOTFOUND == hr)
+                {
+                    ReleaseNullStr(sczValue);
+                }
+                else
+                {
+                    ExitOnFailure(hr, "Failed to get @Value.");
+                }
+
+                // @Name
+                hr = XmlGetAttributeEx(pNode, L"Name", &sczName);
+                ExitOnFailure(hr, "Failed to get @Name.");
+
+                if (0 == ::wcscmp(sczName, L"UseUILanguages"))
+                {
+                    if (sczValue && *sczValue)
+                    {
+                        USHORT us;
+                        hr = StrStringToUInt16(sczValue, 0, &us);
+                        ExitOnFailure(hr, "Failed to parse UseUILanguages.");
+
+                        m_fUseUILanguages = us ? TRUE : FALSE;
+                    }
+                }
+                // ***** extension point for new variables *****
+                // else if (0 == ::wcscmp(sczName, L""))
+                // {
+                // }
+                else
+                {
+                    hr = E_NOTFOUND;
+                    ExitOnFailure1(hr, "Failed to recognize option variable \"%ls\".", sczName);
+                }
+
+                // prepare next iteration
+                ReleaseNullObject(pNode);
+            }
+        }
+
+    LExit:
+        ReleaseObject(pNode);
+        ReleaseObject(pNodes);
+        ReleaseStr(sczName);
+        ReleaseStr(sczValue);
         return hr;
     }
 
@@ -2037,7 +2155,7 @@ private: // privates
                                     hr = StrAllocString(&sczLicenseFilename, PathFile(sczLicenseFormatted), 0);
                                     if (SUCCEEDED(hr))
                                     {
-                                        hr = LocProbeForFile(sczLicenseDirectory, sczLicenseFilename, m_sczLanguage, &sczLicensePath);
+                                        hr = FindLocFile(sczLicenseDirectory, sczLicenseFilename, m_sczLanguage, &sczLicensePath);
                                         if (SUCCEEDED(hr))
                                         {
                                             hr = ThemeLoadRichEditFromFile(m_pTheme, WIXSTDBA_CONTROL_EULA_RICHEDIT, sczLicensePath, m_hModule);
@@ -2831,7 +2949,7 @@ private: // privates
                 hr = PathGetDirectory(sczLicensePath, &sczLicenseDirectory);
                 if (SUCCEEDED(hr))
                 {
-                    hr = LocProbeForFile(sczLicenseDirectory, PathFile(sczLicenseUrl), m_sczLanguage, &sczLicensePath);
+                    hr = FindLocFile(sczLicenseDirectory, PathFile(sczLicenseUrl), m_sczLanguage, &sczLicensePath);
                 }
             }
         }
@@ -2860,6 +2978,7 @@ private: // privates
         LPWSTR sczLaunchTargetElevatedId = NULL;
         LPWSTR sczUnformattedArguments = NULL;
         LPWSTR sczArguments = NULL;
+        LPWSTR sczUnformattedLaunchFolder = NULL;
         LPWSTR sczLaunchFolder = NULL;
         int nCmdShow = SW_SHOWNORMAL;
 
@@ -2888,7 +3007,7 @@ private: // privates
 
         if (BalStringVariableExists(WIXSTDBA_VARIABLE_LAUNCH_WORK_FOLDER))
         {
-            hr = BalGetStringVariable(WIXSTDBA_VARIABLE_LAUNCH_WORK_FOLDER, &sczLaunchFolder);
+            hr = BalGetStringVariable(WIXSTDBA_VARIABLE_LAUNCH_WORK_FOLDER, &sczUnformattedLaunchFolder);
             BalExitOnFailure1(hr, "Failed to get launch working directory variable '%ls'.", WIXSTDBA_VARIABLE_LAUNCH_WORK_FOLDER);
         }
 
@@ -2912,6 +3031,12 @@ private: // privates
                 BalExitOnFailure1(hr, "Failed to format launch arguments variable: %ls", sczUnformattedArguments);
             }
 
+            if (sczUnformattedLaunchFolder)
+            {
+                hr = BalFormatString(sczUnformattedLaunchFolder, &sczLaunchFolder);
+                BalExitOnFailure1(hr, "Failed to format launch working directory variable: %ls", sczUnformattedLaunchFolder);
+            }
+
             hr = ShelExec(sczLaunchTarget, sczArguments, L"open", sczLaunchFolder, nCmdShow, m_hWnd, NULL);
             BalExitOnFailure1(hr, "Failed to launch target: %ls", sczLaunchTarget);
 
@@ -2919,7 +3044,8 @@ private: // privates
         }
 
     LExit:
-        ReleaseStr(sczLaunchFolder);
+        StrSecureZeroFreeString(sczLaunchFolder);
+        ReleaseStr(sczUnformattedLaunchFolder);
         StrSecureZeroFreeString(sczArguments);
         ReleaseStr(sczUnformattedArguments);
         ReleaseStr(sczLaunchTargetElevatedId);
@@ -3196,7 +3322,7 @@ private: // privates
         BalLog(BOOTSTRAPPER_LOG_LEVEL_STANDARD, "WIXSTDBA: LoadBootstrapperBAFunctions() - BA function DLL %ls", sczBafPath);
 #endif
 
-        m_hBAFModule = ::LoadLibraryW(sczBafPath);
+        m_hBAFModule = ::LoadLibraryExW(sczBafPath, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
         if (m_hBAFModule)
         {
             PFN_BOOTSTRAPPER_BA_FUNCTION_CREATE pfnBAFunctionCreate = reinterpret_cast<PFN_BOOTSTRAPPER_BA_FUNCTION_CREATE>(::GetProcAddress(m_hBAFModule, "CreateBootstrapperBAFunction"));
@@ -3364,10 +3490,13 @@ public:
         m_hModule = hModule;
         memcpy_s(&m_command, sizeof(m_command), pCommand, sizeof(BOOTSTRAPPER_COMMAND));
 
-        // Pre-req BA should only show help or do an install (to launch the Managed BA which can then do the right action).
-        if (fPrereq && BOOTSTRAPPER_ACTION_HELP != m_command.action && BOOTSTRAPPER_ACTION_INSTALL != m_command.action)
+        if (fPrereq)
         {
-            m_command.action = BOOTSTRAPPER_ACTION_INSTALL;
+            // Pre-req BA should only show help or do an install (to launch the Managed BA which can then do the right action).
+            if (BOOTSTRAPPER_ACTION_HELP != m_command.action)
+            {
+                m_command.action = BOOTSTRAPPER_ACTION_INSTALL;
+            }
         }
         else // maybe modify the action state if the bundle is or is not already installed.
         {
@@ -3452,6 +3581,8 @@ public:
 
         m_hBAFModule = NULL;
         m_pBAFunction = NULL;
+
+        m_fUseUILanguages = FALSE;
     }
 
 
@@ -3552,6 +3683,8 @@ private:
 
     HMODULE m_hBAFModule;
     IBootstrapperBAFunction* m_pBAFunction;
+
+    BOOL m_fUseUILanguages;
 };
 
 
